@@ -2,7 +2,9 @@ import copy
 import csv
 import functools
 import glob
+import math
 import os
+import random
 
 from collections import namedtuple
 
@@ -11,6 +13,7 @@ import numpy as np
 
 import torch
 import torch.cuda
+import torch.nn.functional as F
 from torch.utils.data import Dataset
 
 from util.disk import getCache
@@ -24,10 +27,7 @@ log.setLevel(logging.DEBUG)
 
 raw_cache = getCache('raw_cache_data')
 
-CandidateInfoTuple = namedtuple(
-	'CandidateInfoTuple',
-	'isNodule_bool, diameter_mm, series_uid, center_xyz',
-)
+CandidateInfoTuple = namedtuple('CandidateInfoTuple', 'isNodule_bool, diameter_mm, series_uid, center_xyz',)
 
 @functools.lru_cache(1)
 def getCandidateInfoList(requireOnDisk_bool=True):
@@ -153,7 +153,9 @@ class LunaDataset(Dataset):
 				 val_stride=0,
 				 isValSet_bool=None,
 				 series_uid=None,
+				 ratio_int=0,
 			):
+		self.ratio_int = ratio_int
 		self.candidateInfo_list = copy.copy(getCandidateInfoList())
 
 		if series_uid:
@@ -169,17 +171,46 @@ class LunaDataset(Dataset):
 			del self.candidateInfo_list[::val_stride]
 			assert self.candidateInfo_list
 
+		self.negative_list = [nt for nt in self.candidateInfo_list if not nt.isNodule_bool]
+		self.pos_list = [nt for nt in self.candidateInfo_list if nt.isNodule_bool]
+
 		log.info("{!r}: {} {} samples".format(
 			self,
 			len(self.candidateInfo_list),
 			"validation" if isValSet_bool else "training",
 		))
 
+	def shuffleSamples(self):
+		if self.ratio_int:   # 1 is true in python
+			random.shuffle(self.negative_list)
+			random.shuffle(self.pos_list)
+
 	def __len__(self):
-		return len(self.candidateInfo_list)
+		if self.ratio_int:
+			return 200000
+		else:
+			return len(self.candidateInfo_list)
+
+	# ration_int 2 meanswe want a 2:1 ratio of negative to positive samples. Tha would mean every third index should be positive
+	# DS Index   0  1  2  3  4  5  6  7  8  9  . . .
+	# Label      +  -  -  +  -  -  +  -  -  +
+	# Pos INdex  0        1        2        3
+	# Neg Index     0  1     2  3     4  5   
 
 	def __getitem__(self, ndx):
-		candidateInfo_tup = self.candidateInfo_list[ndx]
+		if self.ratio_int:   # this will evaluate to true for anything > 0
+			pos_ndx = ndx // (self.ratio_int + 1)
+
+			if ndx % (self.ratio_int + 1):
+				neg_ndx = ndx - 1 - pos_ndx
+				neg_ndx %= len(self.negative_list)
+				candidateInfo_tup = self.negative_list[neg_ndx]
+			else:
+				pos_ndx %= len(self.pos_list)
+				candidateInfo_tup = self.pos_list[pos_ndx]
+		else:
+			candidateInfo_tup = self.candidateInfo_list[ndx]
+		
 		width_irc = (32, 48, 48)
 
 		candidate_a, center_irc = getCtRawCandidate(

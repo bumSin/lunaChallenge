@@ -60,6 +60,12 @@ class LunaTrainingApp:
 			nargs='?',
 			default='dwlpt',
 		)
+		parser.add_argument('--balanced',
+			help="Balance the training data to half positive, half negative.",
+			action='store_true',
+			default=False,
+		)
+
 		self.cli_args = parser.parse_args(sys_argv)
 		self.time_str = datetime.datetime.now().strftime('%Y-%m-%d_%H.%M.%S')
 
@@ -90,6 +96,7 @@ class LunaTrainingApp:
 		train_ds = LunaDataset(
 			val_stride=10,
 			isValSet_bool=False,
+			ratio_int=int(self.cli_args.balanced),
 		)
 
 		batch_size = self.cli_args.batch_size
